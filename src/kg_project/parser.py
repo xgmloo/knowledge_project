@@ -101,10 +101,29 @@ class PDFParser:
 
         chunks: list[str] = []
         start = 0
-        while start < len(normalized):
-            end = min(len(normalized), start + self.chunk_size)
-            chunks.append(normalized[start:end])
-            if end == len(normalized):
+        text_length = len(normalized)
+        separators = ["。\n", "。", "！", "？", "\n\n", "\n"]
+
+        while start < text_length:
+            end = start + self.chunk_size
+
+            if end < text_length:
+                window = normalized[start:end]
+                for sep in separators:
+                    last_sep = window.rfind(sep)
+                    if last_sep > self.chunk_size * 0.5:
+                        end = start + last_sep + len(sep)
+                        break
+            else:
+                end = text_length
+
+            chunk_text = normalized[start:end].strip()
+            if chunk_text:
+                chunks.append(chunk_text)
+
+            if end >= text_length:
                 break
+
             start = max(0, end - self.overlap)
+
         return chunks
