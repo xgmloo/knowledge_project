@@ -5,6 +5,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.progress import track
 from rich.table import Table
 
 from .config import Settings, ensure_dirs
@@ -26,6 +27,19 @@ def _load_chunks(path: Path) -> list[Chunk]:
     return chunks
 
 
+def _render_extraction_preview(result: ExtractionResult) -> None:
+    entity_preview = "、".join(e.name for e in result.entities[:5]) or "无"
+    relation_preview = (
+        "；".join(f"{r.source}-{r.type}->{r.target}" for r in result.relations[:3]) or "无"
+    )
+    console.print(
+        f"[cyan]{result.chunk_id}[/cyan] 实体({len(result.entities)}): {entity_preview}"
+    )
+    console.print(
+        f"[magenta]{result.chunk_id}[/magenta] 关系({len(result.relations)}): {relation_preview}"
+    )
+
+
 @app.command()
 def parse(
     pdf_dir: Path = typer.Option(Path("data/pdfs"), help="教材 PDF 文件夹"),
@@ -45,6 +59,7 @@ def extract(
     chunks_file: Path = typer.Option(Path("data/outputs/chunks.jsonl"), help="chunk 文件"),
     out_file: Path = typer.Option(Path("data/outputs/extractions.jsonl"), help="抽取结果"),
     max_chunks: int = typer.Option(0, help="仅处理前 N 个 chunk，0 表示全部"),
+    show_preview: bool = typer.Option(True, help="抽取过程中打印知识预览"),
 ) -> None:
     settings = Settings(chunks_file=chunks_file, extraction_file=out_file)
     ensure_dirs(settings)
@@ -55,9 +70,11 @@ def extract(
         chunks = chunks[:max_chunks]
 
     with settings.extraction_file.open("w", encoding="utf-8") as f:
-        for c in chunks:
+        for c in track(chunks, description="抽取中", total=len(chunks)):
             result = extractor.extract(c.chunk_id, c.text, c.images, c.formula_candidates)
             f.write(json.dumps(result.model_dump(), ensure_ascii=False) + "\n")
+            if show_preview:
+                _render_extraction_preview(result)
     console.print(f"[green]完成抽取: {len(chunks)} chunks -> {settings.extraction_file}")
 
 
