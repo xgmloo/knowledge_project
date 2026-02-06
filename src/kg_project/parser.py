@@ -55,15 +55,33 @@ class PDFParser:
                 f.write(json.dumps(chunk.model_dump(), ensure_ascii=False) + "\n")
 
     def _extract_images(self, page: fitz.Page, pdf_stem: str, page_num: int) -> list[str]:
-        images = []
-        for i, image_info in enumerate(page.get_images(full=True), start=1):
-            xref = image_info[0]
-            pix = fitz.Pixmap(page.parent, xref)
-            if pix.n - pix.alpha > 3:
-                pix = fitz.Pixmap(fitz.csRGB, pix)
+        images: list[str] = []
+        seen: set[tuple[int, int, int, int, int]] = set()
+
+        # NOTE:
+        # `page.get_images(full=True)` often includes stencil / mask resources that are
+        # not the visible body images (commonly exported as black squares).
+        # `get_image_info(xrefs=True)` provides the rendered bbox, so we can clip the
+        # page and export what is actually visible at that location.
+        for i, info in enumerate(page.get_image_info(xrefs=True), start=1):
+            xref = int(info.get("xref", 0) or 0)
+            bbox = fitz.Rect(info["bbox"])
+            if bbox.is_empty or bbox.width < 12 or bbox.height < 12:
+                continue
+
+            key = (xref, round(bbox.x0), round(bbox.y0), round(bbox.x1), round(bbox.y1))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            pix = page.get_pixmap(clip=bbox, matrix=fitz.Matrix(2, 2), alpha=False)
+            if pix.width < 24 or pix.height < 24:
+                continue
+
             image_file = self.image_output_dir / f"{pdf_stem}_p{page_num}_{i}.png"
             pix.save(image_file)
             images.append(str(image_file))
+
         return images
 
     def _extract_formula_candidates(self, text: str) -> list[str]:
