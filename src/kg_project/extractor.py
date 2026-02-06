@@ -13,14 +13,14 @@ PROMPT_TEMPLATE = """
 你是知识图谱抽取器。请根据输入教材片段（文本、图片、公式候选）抽取知识图谱。
 输出必须是严格 JSON，不要输出 markdown。
 JSON schema:
-{
+{{
   "entities": [
-    {"name": "", "type": "Concept|Person|Method|Formula|Term|Other", "description": ""}
+    {{"name": "", "type": "Concept|Person|Method|Formula|Term|Other", "description": ""}}
   ],
   "relations": [
-    {"source": "", "target": "", "type": "定义|包含|推导|应用于|相关于|前置于", "evidence": ""}
+    {{"source": "", "target": "", "type": "定义|包含|推导|应用于|相关于|前置于", "evidence": ""}}
   ]
-}
+}}
 要求：
 1) 实体 name 去重，保持教材术语原文。
 2) 关系中的 source/target 必须出现在 entities.name 中。
