@@ -1,16 +1,14 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
-from pathlib import Path
 
 import requests
 
 from .models import Entity, ExtractionResult, Relation
 
 PROMPT_TEMPLATE = """
-你是知识图谱抽取器。请根据输入教材片段（文本、图片、公式候选）抽取知识图谱。
+你是知识图谱抽取器。请仅根据输入教材片段文本抽取知识图谱。
 输出必须是严格 JSON，不要输出 markdown。
 JSON schema:
 {{
@@ -22,40 +20,50 @@ JSON schema:
   ]
 }}
 要求：
-1) 实体 name 去重，保持教材术语原文。
-2) 关系中的 source/target 必须出现在 entities.name 中。
-3) 如果信息不足，返回空数组而不是编造。
+1) 只依据文本内容抽取，不要使用图片与公式候选信息。
+2) 实体 name 去重，保持教材术语原文。
+3) 关系中的 source/target 必须出现在 entities.name 中。
+4) 如果信息不足，返回空数组而不是编造。
 
 片段文本:
 {text}
-
-公式候选:
-{formulas}
 """.strip()
 
 
 class OllamaExtractor:
-    def __init__(self, base_url: str, model: str, timeout: int = 120) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        timeout: int = 120,
+        retry_with_short_text: bool = True,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.model = model
         self.timeout = timeout
+        self.retry_with_short_text = retry_with_short_text
 
     def extract(self, chunk_id: str, text: str, image_paths: list[str], formulas: list[str]) -> ExtractionResult:
-        payload = {
-            "model": self.model,
-            "prompt": PROMPT_TEMPLATE.format(text=text, formulas="\n".join(formulas[:20])),
-            "stream": False,
-            "format": "json",
-            "images": [self._encode_image(Path(p)) for p in image_paths[:4]],
-        }
+        # 按用户要求：忽略图片与公式候选，仅使用文本抽取。
+        _ = image_paths
+        _ = formulas
 
-        response = requests.post(
-            f"{self.base_url}/api/generate",
-            json=payload,
-            timeout=self.timeout,
-        )
-        response.raise_for_status()
-        raw_text = response.json().get("response", "{}")
+        payloads = self._build_attempt_payloads(text)
+        raw_text = "{}"
+
+        for payload in payloads:
+            try:
+                response = requests.post(
+                    f"{self.base_url}/api/generate",
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                response.raise_for_status()
+                raw_text = response.json().get("response", "{}")
+                break
+            except requests.RequestException as exc:
+                raw_text = self._extract_error_body(exc)
+                continue
 
         parsed = self._safe_parse_json(raw_text)
         entities = [Entity(**item, source_chunk_id=chunk_id) for item in parsed.get("entities", []) if item.get("name")]
@@ -72,9 +80,33 @@ class OllamaExtractor:
             raw_response=raw_text,
         )
 
+    def _build_attempt_payloads(self, text: str) -> list[dict[str, object]]:
+        prompt = PROMPT_TEMPLATE.format(text=text)
+        base_payload: dict[str, object] = {
+            "model": self.model,
+            "prompt": prompt,
+            "stream": False,
+            "format": "json",
+        }
+
+        payloads = [base_payload]
+
+        if self.retry_with_short_text and len(text) > 1200:
+            short_prompt = PROMPT_TEMPLATE.format(text=text[:1200])
+            payloads.append({**base_payload, "prompt": short_prompt})
+
+        return payloads
+
     @staticmethod
-    def _encode_image(path: Path) -> str:
-        return base64.b64encode(path.read_bytes()).decode("utf-8")
+    def _extract_error_body(exc: requests.RequestException) -> str:
+        response = getattr(exc, "response", None)
+        if response is None:
+            return "{}"
+
+        try:
+            return response.json().get("response", "{}")
+        except ValueError:
+            return response.text or "{}"
 
     @staticmethod
     def _safe_parse_json(raw_text: str) -> dict:
